@@ -30,6 +30,9 @@ class FinancialAgent:
             stock = yf.Ticker(ticker)
             info = stock.info
             
+            if not info:
+                raise Exception(f"No data found for ticker {ticker}. For Indian stocks, try adding .NS (NSE) or .BO (BSE) suffix.")
+            
             # Get current price data
             current_data = {
                 "symbol": ticker,
@@ -182,14 +185,31 @@ def main():
     with st.sidebar:
         st.header("Stock Selection")
         ticker = st.text_input("Enter Stock Ticker Symbol:", value="AAPL").upper()
+        exchange = st.selectbox(
+            "Select Exchange",
+            ["US", "NSE (India)", "BSE (India)"],
+            index=0
+        )
+        
+        # Format ticker based on exchange
+        if exchange == "NSE (India)":
+            ticker = f"{ticker}.NS"
+        elif exchange == "BSE (India)":
+            ticker = f"{ticker}.BO"
+            
         analyze_button = st.button("Analyze Stock", type="primary")
         
         st.markdown("---")
         st.markdown("### About")
         st.markdown("""
         This dashboard provides comprehensive stock analysis using data from:
-        - Yahoo Finance for stock data
+        - Yahoo Finance for stock data (US, NSE, and BSE markets)
         - News API for company news (if API key is provided)
+        
+        For Indian stocks:
+        - Use company name without any suffix
+        - Select appropriate exchange (NSE or BSE)
+        Example: For Tata Motors, enter 'TATAMOTORS'
         """)
         
     # Store ticker in session state if not already present
@@ -277,155 +297,148 @@ def main():
                 # Get the current stock data if not already defined
                 current = price_data.get("current", {})
                 
-                # Time period selection
-                period_options = {
-                    "1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y", "2Y": "2y", "5Y": "5y", "Max": "max"
+                # Time period selection with appropriate intervals
+                period_intervals = {
+                    "1M": ("1mo", "1d"),
+                    "3M": ("3mo", "1d"),
+                    "6M": ("6mo", "1d"),
+                    "1Y": ("1y", "1d"),
+                    "2Y": ("2y", "1wk"),
+                    "5Y": ("5y", "1wk"),
+                    "Max": ("max", "1mo")
                 }
-                period = st.selectbox("Select Time Period", list(period_options.keys()), index=0)
+                period = st.selectbox("Select Time Period", list(period_intervals.keys()), index=0)
                 
-                # Get historical data for selected period using yfinance period parameter format
+                # Get historical data with proper interval
                 with st.spinner(f"Loading {period} data..."):
-                    stock = yf.Ticker(ticker)
-                    hist_df = stock.history(period=period_options[period])
-                    
-                    # If historical data is empty, try with interval parameter
-                    if hist_df is None or hist_df.empty:
-                        # Adjust interval based on period for better data resolution
-                        interval = "1d"  # default daily interval
-                        if period in ["5Y", "Max"]:
-                            interval = "1wk"  # weekly interval for long periods
-                        elif period in ["1Y", "2Y"]:
-                            interval = "1d"
-                            
-                        hist_df = stock.history(period=period_options[period], interval=interval)
-                
-                if hist_df is not None and not hist_df.empty:
-                    # Display historical data stats
-                    st.subheader(f"Historical Data Overview ({period})")
-                    
-                    # Calculate key statistics
-                    start_date = hist_df.index.min().strftime('%Y-%m-%d')
-                    end_date = hist_df.index.max().strftime('%Y-%m-%d')
-                    total_days = len(hist_df)
-                    price_change = hist_df['Close'].iloc[-1] - hist_df['Close'].iloc[0]
-                    price_change_pct = (price_change / hist_df['Close'].iloc[0]) * 100
-                    
-                    # Display stats in columns
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Period Start", start_date)
-                    with col2:
-                        st.metric("Period End", end_date)
-                    with col3:
-                        st.metric("Price Change", f"${price_change:.2f}", delta=f"{price_change_pct:.2f}%")
-                    with col4:
-                        st.metric("Trading Days", total_days)
-                    
-                    # Chart type selection
-                    chart_type = st.radio("Chart Type", ["Line", "Candlestick"], horizontal=True)
-                    
-                    if chart_type == "Line":
-                        fig = px.line(
-                            hist_df, 
-                            x=hist_df.index, 
-                            y="Close", 
-                            title=f"{current.get('name', ticker)} Stock Price",
-                            labels={"Close": "Price ($)", "Date": ""},
-                            template="plotly_white"
-                        )
-                        fig.update_yaxes(tickprefix="$")
-                        st.plotly_chart(fig, use_container_width=True)
+                    try:
+                        stock = yf.Ticker(ticker)
+                        period_code, interval = period_intervals[period]
+                        hist_df = stock.history(period=period_code, interval=interval)
                         
-                    else:  # Candlestick
-                        # Ensure we have all required columns
-                        required_cols = ['Open', 'High', 'Low', 'Close']
-                        if all(col in hist_df.columns for col in required_cols):
-                            fig = go.Figure(
-                                data=[
-                                    go.Candlestick(
-                                        x=hist_df.index,
-                                        open=hist_df['Open'],
-                                        high=hist_df['High'],
-                                        low=hist_df['Low'],
-                                        close=hist_df['Close']
-                                    )
-                                ]
-                            )
-                            fig.update_layout(
-                                title=f"{current.get('name', ticker)} Stock Price",
-                                yaxis_title="Price ($)",
-                                xaxis_title="Date",
-                                template="plotly_white",
-                                xaxis_rangeslider_visible=False,  # Disable rangeslider for cleaner look
-                            )
-                            # Update y-axis to show currency format
-                            fig.update_yaxes(tickprefix="$")
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.error("Missing required price data for candlestick chart")
-                    
-                    # Add moving averages option
-                    if st.checkbox("Show Moving Averages", value=False):
-                        ma_periods = st.multiselect(
-                            "Select Moving Average Periods",
-                            [5, 10, 20, 50, 100, 200],
-                            default=[20, 50]
-                        )
+                        if hist_df.empty:
+                            st.warning("No data available for the selected period.")
+                            return
+                            
+                        # Resample data for better visualization if needed
+                        if len(hist_df) > 1000:
+                            hist_df = hist_df.resample('D').agg({
+                                'Open': 'first',
+                                'High': 'max',
+                                'Low': 'min',
+                                'Close': 'last',
+                                'Volume': 'sum'
+                            }).dropna()
                         
-                        # Create a new figure with moving averages
-                        if chart_type == "Line":
-                            ma_fig = go.Figure()
-                            
-                            # Add the close price
-                            ma_fig.add_trace(
-                                go.Scatter(
-                                    x=hist_df.index,
-                                    y=hist_df['Close'],
-                                    name="Close",
-                                    line=dict(color='blue')
-                                )
+                        # Chart type selection
+                        chart_type = st.radio("Chart Type", ["Line", "Candlestick"], horizontal=True)
+                        
+                        # Add moving averages selection
+                        show_ma = st.checkbox("Show Moving Averages", value=False)
+                        if show_ma:
+                            ma_periods = st.multiselect(
+                                "Select Moving Average Periods",
+                                [5, 10, 20, 50, 100, 200],
+                                default=[20, 50]
                             )
                             
-                            # Add moving averages
+                            # Calculate moving averages
                             for period in ma_periods:
                                 if len(hist_df) >= period:
                                     hist_df[f'MA_{period}'] = hist_df['Close'].rolling(window=period).mean()
-                                    ma_fig.add_trace(
-                                        go.Scatter(
-                                            x=hist_df.index,
-                                            y=hist_df[f'MA_{period}'],
-                                            name=f'{period}-day MA'
-                                        )
-                                    )
+                        
+                        if chart_type == "Line":
+                            fig = go.Figure()
                             
-                            ma_fig.update_layout(
-                                title=f"{current.get('name', ticker)} Stock Price with Moving Averages",
-                                yaxis_title="Price ($)",
-                                xaxis_title="Date",
-                                template="plotly_white"
+                            # Add price line
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=hist_df.index,
+                                    y=hist_df['Close'],
+                                    name="Price",
+                                    line=dict(color='blue', width=2)
+                                )
                             )
-                            ma_fig.update_yaxes(tickprefix="$")
-                            st.plotly_chart(ma_fig, use_container_width=True)
+                            
+                            # Add moving averages to line chart
+                            if show_ma:
+                                colors = ['red', 'orange', 'green', 'purple', 'brown', 'pink']
+                                for i, period in enumerate(ma_periods):
+                                    if f'MA_{period}' in hist_df.columns:
+                                        fig.add_trace(
+                                            go.Scatter(
+                                                x=hist_df.index,
+                                                y=hist_df[f'MA_{period}'],
+                                                name=f'{period}-MA',
+                                                line=dict(color=colors[i % len(colors)])
+                                            )
+                                        )
+                            
+                        else:  # Candlestick
+                            fig = go.Figure()
+                            
+                            # Add candlestick
+                            fig.add_trace(
+                                go.Candlestick(
+                                    x=hist_df.index,
+                                    open=hist_df['Open'],
+                                    high=hist_df['High'],
+                                    low=hist_df['Low'],
+                                    close=hist_df['Close'],
+                                    name="Price"
+                                )
+                            )
+                            
+                            # Add moving averages to candlestick chart
+                            if show_ma:
+                                colors = ['red', 'orange', 'green', 'purple', 'brown', 'pink']
+                                for i, period in enumerate(ma_periods):
+                                    if f'MA_{period}' in hist_df.columns:
+                                        fig.add_trace(
+                                            go.Scatter(
+                                                x=hist_df.index,
+                                                y=hist_df[f'MA_{period}'],
+                                                name=f'{period}-MA',
+                                                line=dict(color=colors[i % len(colors)])
+                                            )
+                                        )
                         
-                    # Volume chart
-                    if 'Volume' in hist_df.columns and not hist_df['Volume'].isnull().all():
-                        volume_fig = px.bar(
-                            hist_df,
-                            x=hist_df.index,
-                            y="Volume",
-                            title=f"{current.get('name', ticker)} Trading Volume",
-                            labels={"Volume": "Volume", "Date": ""},
-                            template="plotly_white"
+                        # Update layout for both chart types
+                        fig.update_layout(
+                            title=f"{current.get('name', ticker)} Stock Price",
+                            yaxis_title="Price ($)",
+                            xaxis_title="Date",
+                            template="plotly_white",
+                            xaxis_rangeslider_visible=False,
+                            height=600
                         )
-                        st.plotly_chart(volume_fig, use_container_width=True)
-                    else:
-                        st.warning("Volume data not available for the selected period.")
                         
-                    # Display historical data in a table (with option to expand)
-                    with st.expander("View Raw Historical Data"):
-                        st.dataframe(hist_df.sort_index(ascending=False), use_container_width=True)
-                else:
-                    st.warning("No historical data available for this stock. Please try another ticker symbol or time period.")
+                        # Update y-axis format
+                        fig.update_yaxes(tickprefix="$")
+                        
+                        # Show the chart
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Volume chart
+                        if 'Volume' in hist_df.columns and not hist_df['Volume'].isnull().all():
+                            volume_fig = go.Figure(
+                                go.Bar(
+                                    x=hist_df.index,
+                                    y=hist_df['Volume'],
+                                    name="Volume"
+                                )
+                            )
+                            volume_fig.update_layout(
+                                title=f"{current.get('name', ticker)} Trading Volume",
+                                yaxis_title="Volume",
+                                xaxis_title="Date",
+                                template="plotly_white",
+                                height=300
+                            )
+                            st.plotly_chart(volume_fig, use_container_width=True)
+                            
+                    except Exception as e:
+                        st.error(f"Error loading chart data: {str(e)}")
             
             # Recommendations Tab
             with recommendations_tab:
