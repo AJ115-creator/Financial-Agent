@@ -23,19 +23,60 @@ class FinancialAgent:
     def __init__(self):
         """Initialize the financial agent with necessary API clients."""
         self.newsapi = NewsApiClient(api_key=NEWS_API_KEY) if NEWS_API_KEY else None
+        # Common Indian stock symbol mappings
+        self.indian_stock_mappings = {
+            'TATAMOTORS': 'TATAMOTORS.NS',
+            'RELIANCE': 'RELIANCE.NS',
+            'TCS': 'TCS.NS',
+            'INFY': 'INFY.NS',
+            'HDFCBANK': 'HDFCBANK.NS',
+            'ICICIBANK': 'ICICIBANK.NS',
+            'HINDUNILVR': 'HINDUNILVR.NS',
+            'ITC': 'ITC.NS',
+            'MAHINDRA': 'M&M.NS',
+            'TATA': 'TATASTEEL.NS',  # Use specific Tata company symbol
+            'BAJAJ': 'BAJFINANCE.NS',  # Use specific Bajaj company symbol
+        }
+    
+    def get_valid_symbol(self, ticker: str, exchange: str = "US") -> str:
+        """Get valid symbol based on exchange."""
+        ticker = ticker.upper().replace(" ", "")
         
-    def get_stock_price(self, ticker: str) -> Dict[str, Any]:
+        if exchange == "NSE (India)":
+            # Check if it's in our mapping first
+            if ticker in self.indian_stock_mappings:
+                return self.indian_stock_mappings[ticker]
+            # If not in mapping, add .NS suffix if not already present
+            if not ticker.endswith('.NS'):
+                return f"{ticker}.NS"
+        elif exchange == "BSE (India)":
+            # Remove any existing suffix and add .BO
+            base_ticker = ticker.split('.')[0]
+            return f"{base_ticker}.BO"
+        
+        return ticker
+    
+    def get_stock_price(self, ticker: str, exchange: str = "US") -> Dict[str, Any]:
         """Get current and historical stock prices."""
         try:
-            stock = yf.Ticker(ticker)
+            valid_ticker = self.get_valid_symbol(ticker, exchange)
+            stock = yf.Ticker(valid_ticker)
             info = stock.info
             
             if not info:
-                raise Exception(f"No data found for ticker {ticker}. For Indian stocks, try adding .NS (NSE) or .BO (BSE) suffix.")
-            
+                suggestion = ""
+                if exchange in ["NSE (India)", "BSE (India)"]:
+                    suggestion = (
+                        "For Indian stocks, try:\n"
+                        "1. Using the exact symbol (e.g., 'TATAMOTORS' instead of 'TATA')\n"
+                        "2. Checking if the stock is listed on the selected exchange\n"
+                        "3. Using the complete company name without spaces"
+                    )
+                raise Exception(f"No data found for ticker {valid_ticker}. {suggestion}")
+
             # Get current price data
             current_data = {
-                "symbol": ticker,
+                "symbol": valid_ticker,
                 "name": info.get("shortName", "N/A"),
                 "price": info.get("currentPrice", info.get("regularMarketPrice", "N/A")),
                 "change": info.get("regularMarketChangePercent", "N/A"),
@@ -184,20 +225,29 @@ def main():
     # Sidebar for user input
     with st.sidebar:
         st.header("Stock Selection")
-        ticker = st.text_input("Enter Stock Ticker Symbol:", value="AAPL").upper()
         exchange = st.selectbox(
             "Select Exchange",
             ["US", "NSE (India)", "BSE (India)"],
             index=0
         )
         
-        # Format ticker based on exchange
-        if exchange == "NSE (India)":
-            ticker = f"{ticker}.NS"
-        elif exchange == "BSE (India)":
-            ticker = f"{ticker}.BO"
+        # Add helper text based on exchange
+        if exchange in ["NSE (India)", "BSE (India)"]:
+            st.markdown("""
+            **Indian Stock Examples:**
+            - TATAMOTORS (Tata Motors)
+            - RELIANCE (Reliance Industries)
+            - HDFCBANK (HDFC Bank)
+            - INFY (Infosys)
+            """)
             
+        ticker = st.text_input("Enter Stock Ticker Symbol:", value="AAPL").upper()
         analyze_button = st.button("Analyze Stock", type="primary")
+        
+        # Show the actual symbol being used
+        if exchange in ["NSE (India)", "BSE (India)"]:
+            valid_symbol = agent.get_valid_symbol(ticker, exchange)
+            st.caption(f"Searching for: {valid_symbol}")
         
         st.markdown("---")
         st.markdown("### About")
@@ -223,7 +273,7 @@ def main():
         # Show loading spinner
         with st.spinner(f"Analyzing {ticker}..."):
             # Get stock data
-            price_data = agent.get_stock_price(ticker)
+            price_data = agent.get_stock_price(ticker, exchange)
             recommendations_data = agent.get_analyst_recommendations(ticker)
             fundamentals_data = agent.get_stock_fundamentals(ticker)
             
